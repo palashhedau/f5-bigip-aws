@@ -1,0 +1,207 @@
+---
+###################################################################################
+#     _              _ _     _        ____  _             _                 _     #
+#    / \   _ __  ___(_) |__ | | ___  |  _ \| | __ _ _   _| |__   ___   ___ | | __ #
+#   / _ \ | '_ \/ __| | '_ \| |/ _ \ | |_) | |/ _` | | | | '_ \ / _ \ / _ \| |/ / #
+#  / ___ \| | | \__ \ | |_) | |  __/ |  __/| | (_| | |_| | |_) | (_) | (_) |   <  #
+# /_/   \_\_| |_|___/_|_.__/|_|\___| |_|   |_|\__,_|\__, |_.__/ \___/ \___/|_|\_\ #
+#                                                   |___/                         #
+###################################################################################
+
+
+- hosts: localhost
+  gather_facts: no
+
+###################################################################################
+#                    __     __         _       _     _                            #
+#                    \ \   / /_ _ _ __(_) __ _| |__ | | ___  ___                  #
+#                     \ \ / / _` | '__| |/ _` | '_ \| |/ _ \/ __|                 #  
+#                      \ V / (_| | |  | | (_| | |_) | |  __/\__ \                 #
+#                       \_/ \__,_|_|  |_|\__,_|_.__/|_|\___||___/                 #
+#                                                                                 #
+###################################################################################
+
+  vars:
+  
+  # AWS API Credentials
+    #aws_access_key: ""
+    #aws_secret_key: ""
+
+  # SSH
+    # This is the name of the SSH private key object in AWS
+    sshKey:
+    # This is the path to your local SSH private key located on your computer
+    sshKeyPath:
+
+  # AWS settings
+    region: eu-west-2
+    availibilityZone: eu-west-2a
+    vpc_network: "192.168.0.0/16"
+    f5lab_subnet: "192.168.10.0/24"
+    stack_name: F5-BIG-IP-LAB
+
+  # BIG-IP settings    
+    admin_password: 
+    imageName: "Best"
+    instanceType: "t2.medium"
+    timezone: "Europe/Paris"
+    ntpServer: "0.pool.ntp.org"
+
+###################################################################################
+#                               _____         _                                   #
+#                              |_   _|_ _ ___| | _____                            #
+#                                | |/ _` / __| |/ / __|                           #
+#                                | | (_| \__ \   <\__ \                           #
+#                                |_|\__,_|___/_|\_\___/                           #
+#                                                                                 #
+###################################################################################
+
+  tasks:
+  
+  # VPC and Subnet
+  - name: CREATING VPC AND SUBNET
+    ec2_vpc:
+      #aws_access_key: "{{ aws_access_key }}"
+      #aws_secret_key: "{{ aws_secret_key }}"
+      state: present
+      cidr_block: "{{ vpc_network }}"
+      resource_tags: { "Name" : "F5 LAB VPC", "Environment" : "Testing" }
+      subnets:
+        - cidr: "{{ f5lab_subnet }}"
+          az: "{{ availibilityZone }}"
+          resource_tags: { "Name" : "F5 LAB Subnet", "Environment":"Testing" }
+      internet_gateway: True
+      route_tables:
+          - subnets:
+              - "{{ f5lab_subnet }}"
+            routes:
+              - dest: 0.0.0.0/0
+                gw: igw
+      region: "{{ region }}"
+    register: vpc
+
+
+  # VPC and Subnet ID variables
+  - name: FETCHING VARIABLES
+    set_fact:
+      vpc_id: "{{ vpc.vpc.id }}"
+      subnet_id: "{{ vpc.subnets[0].id }}"
+
+
+  # Security Group 
+  - name: CREATING SECURITY GROUP
+    ec2_group:
+      #aws_access_key: "{{ aws_access_key }}"
+      #aws_secret_key: "{{ aws_secret_key }}"
+      name: "F5 BIG-IP Security Group"
+      description: "F5 BIG-IP Security Group"
+      vpc_id: "{{ vpc_id }}"
+      region: "{{ region }}"
+      rules:
+        - proto: tcp
+          from_port: 22
+          to_port: 22
+          cidr_ip: 0.0.0.0/0
+        - proto: tcp
+          from_port: 80
+          to_port: 80
+          cidr_ip: 0.0.0.0/0
+        - proto: tcp
+          from_port: 443
+          to_port: 443
+          cidr_ip: 0.0.0.0/0
+        - proto: tcp
+          from_port: 8443
+          to_port: 8443
+          cidr_ip: 0.0.0.0/0
+    register: securityGroup
+
+
+  # Security Group ID variable
+  - name: FETCHING VARIABLES
+    set_fact:
+      securityGroup_id: "{{ securityGroup.group_id }}"
+
+
+  # Cloudformation
+  - name: DEPLOYING CLOUDFORMATION STACK (IT TAKES A LITTLE WHILE)
+    cloudformation:
+      #aws_access_key: "{{ aws_access_key }}"
+      #aws_secret_key: "{{ aws_secret_key }}"
+      stack_name: "{{ stack_name }}"
+      state: present
+      region: "{{ region }}"
+      disable_rollback: true
+      template_url: "https://s3.amazonaws.com/f5-cft/f5-existing-stack-byol-1nic-bigip.template"
+      template_parameters:
+        licenseKey1: "L1234-56789-01234-56789-0123456"
+        sshKey: "{{ sshKey }}"
+        Vpc: "{{ vpc_id }}"
+        subnet1Az1: "{{ subnet_id }}"
+        restrictedSrcAddress: "0.0.0.0/0"
+        bigipExternalSecurityGroup: "{{  securityGroup_id }}"
+        imageName: "Best"
+        instanceType: "t2.medium"
+        timezone: "Europe/Paris"
+        ntpServer: "0.pool.ntp.org"
+      tags:
+        application: "f5app"
+        environment: "f5env"
+        owner: "f5owner"
+        group: "f5group"
+        costcenter: "f5costcenter"
+    register: cloudformation_result
+
+
+  # Elastic IP
+  - name: FETCHING ELASTIC IP
+    set_fact:
+      elasticIP: "{{ cloudformation_result.stack_outputs.Bigip1subnet1Az1SelfEipAddress }}"
+      bigipURL: "{{ cloudformation_result.stack_outputs.Bigip1Url }}"
+
+  
+  # Pause for 6 minutes
+  - name: "PAUSING FOR 5 MINUTES UNTIL BIG-IP IS READY"
+    pause:
+      minutes: 5
+
+
+  # Check SSH
+  - name: CHECKING FOR SSH 
+    wait_for:
+      host: "{{ elasticIP }}"
+      port: 22
+      timeout: 300
+
+
+  # Check MCDP state
+  - name: CHECKING MCPD STATE
+    command: ssh -t -q -o StrictHostKeyChecking=no admin@{{ elasticIP }} -i {{ sshKeyPath }} "show sys mcp"
+    register: mcp_state
+    changed_when: false
+    until: mcp_state.stdout.find("full-config-load-succeed") != -1
+    retries: 18
+    delay: 10
+
+
+  # Changing admin password
+  - name: RESETTING BIG-IP ADMIN PASSWORD
+    expect:
+      command: ssh -t -q -o StrictHostKeyChecking=no admin@{{ elasticIP }} -i {{ sshKeyPath }} "modify auth password admin ; save sys config"
+      responses:
+        (?i)password: "{{ admin_password }}"
+
+
+  # Check HTTPS/8443
+  - name: CHECKING FOR HTTPS (TCP/8443)
+    wait_for:
+      host: "{{ elasticIP }}"
+      port: 8443
+      timeout: 300
+
+ 
+  # Ready to go
+  - debug:
+      msg: Please connect to BIG-IP - {{ bigipURL }}
+
+...
