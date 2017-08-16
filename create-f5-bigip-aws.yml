@@ -160,7 +160,7 @@
       bigipURL: "{{ cloudformation_result.stack_outputs.Bigip1Url }}"
 
   
-  # Pause for 6 minutes
+  # Pause for 5 minutes
   - name: "PAUSING FOR 5 MINUTES UNTIL BIG-IP IS READY"
     pause:
       minutes: 5
