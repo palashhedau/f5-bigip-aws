@@ -182,6 +182,11 @@
     until: mcp_state.stdout.find("full-config-load-succeed") != -1
     retries: 18
     delay: 10
+    
+  # Pause for 30 seconds
+  - name: "PAUSING FOR 30 SECONDS BEFORE RESETTING ADMIN PASSWORD"
+    pause:
+      seconds: 30
 
 
   # Changing admin password
